@@ -3,11 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from io import BytesIO
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -23,42 +22,15 @@ st.set_page_config(
 
 st.title("M-Pesa Statement Analysis Dashboard")
 
-st.markdown(
-    """
-    Upload your M-Pesa Excel workbook and analyze:
-
-    - Money received
-    - Money sent
-    - Withdrawals
-    - Merchant payments
-    - Airtime purchases
-    - Charges and fees
-    - Transaction amounts
-    - Transaction ranges
-    - People and businesses
-    - Same-person money movement
-    - Daily transaction activity
-    - Balance trends
-    - Transaction status
-    """
+st.write(
+    "Upload your M-Pesa Excel workbook to analyze transactions, "
+    "money in, money out, charges, transaction ranges, people, "
+    "and account balances."
 )
 
 
 # ============================================================
-# REQUIRED SHEETS
-# ============================================================
-
-REQUIRED_SHEETS = [
-    "Transactions",
-    "Statement Summary",
-    "OCR Raw Rows",
-    "Amount Range Analysis",
-    "Same Person Analysis"
-]
-
-
-# ============================================================
-# REQUIRED TRANSACTION COLUMNS
+# REQUIRED COLUMNS
 # ============================================================
 
 REQUIRED_COLUMNS = [
@@ -74,127 +46,114 @@ REQUIRED_COLUMNS = [
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# MONEY CLEANING FUNCTION
 # ============================================================
 
 def clean_money(value):
-    """
-    Convert money values such as:
-    Ksh 1,000.00
-    1,000
-    1000
-    to numeric values.
-    """
 
     if pd.isna(value):
-        return 0.0
+        return np.nan
 
-    value = str(value)
+    value = str(value).strip()
 
-    value = (
-        value.replace("Ksh", "")
-        .replace("KES", "")
-        .replace("ksh", "")
-        .replace(",", "")
-        .replace(" ", "")
-    )
+    # Remove currency labels
+    value = value.replace("KSh", "")
+    value = value.replace("KES", "")
+    value = value.replace("ksh", "")
+    value = value.replace("Kes", "")
 
-    value = value.replace("(", "-").replace(")", "")
+    # Remove commas and spaces
+    value = value.replace(",", "")
+    value = value.replace(" ", "")
+
+    # Handle brackets
+    value = value.replace("(", "-")
+    value = value.replace(")", "")
 
     try:
         return float(value)
-    except:
-        return 0.0
 
+    except:
+        return np.nan
+
+
+# ============================================================
+# TRANSACTION TYPE DETECTION
+# ============================================================
 
 def detect_transaction_type(details):
 
     text = str(details).lower()
 
-    # Money received
-    money_in_words = [
-        "funds received",
-        "received from",
-        "money received",
-        "receive international",
-        "received international",
-        "cash deposit",
-        "deposit"
-    ]
+    if any(
+        word in text
+        for word in [
+            "funds received",
+            "received from",
+            "money received",
+            "receive international",
+            "received international"
+        ]
+    ):
+        return "Money In"
 
-    for word in money_in_words:
-        if word in text:
-            return "Money In"
+    if any(
+        word in text
+        for word in [
+            "withdraw",
+            "withdrawal"
+        ]
+    ):
+        return "Withdrawal"
 
-    # Withdrawals
-    withdrawal_words = [
-        "withdraw",
-        "withdrawal",
-        "cash withdrawal"
-    ]
+    if any(
+        word in text
+        for word in [
+            "merchant payment",
+            "buy goods",
+            "till"
+        ]
+    ):
+        return "Merchant Payment"
 
-    for word in withdrawal_words:
-        if word in text:
-            return "Withdrawal"
+    if any(
+        word in text
+        for word in [
+            "pay bill",
+            "paybill"
+        ]
+    ):
+        return "Paybill"
 
-    # Merchant payments
-    merchant_words = [
-        "merchant payment",
-        "buy goods",
-        "till",
-        "merchant"
-    ]
+    if "airtime" in text:
+        return "Airtime"
 
-    for word in merchant_words:
-        if word in text:
-            return "Merchant Payment"
+    if any(
+        word in text
+        for word in [
+            "customer transfer",
+            "send money",
+            "sent to",
+            "transfer to"
+        ]
+    ):
+        return "Money Out"
 
-    # Paybill
-    paybill_words = [
-        "pay bill",
-        "paybill",
-        "business number"
-    ]
-
-    for word in paybill_words:
-        if word in text:
-            return "Paybill"
-
-    # Airtime
-    airtime_words = [
-        "airtime"
-    ]
-
-    for word in airtime_words:
-        if word in text:
-            return "Airtime"
-
-    # Transfers
-    transfer_words = [
-        "customer transfer to",
-        "send money",
-        "sent to",
-        "customer payment",
-        "transfer to"
-    ]
-
-    for word in transfer_words:
-        if word in text:
-            return "Money Out"
-
-    # Charges
-    charge_words = [
-        "charge",
-        "fee",
-        "transaction cost"
-    ]
-
-    for word in charge_words:
-        if word in text:
-            return "Charge"
+    if any(
+        word in text
+        for word in [
+            "charge",
+            "fee"
+        ]
+    ):
+        return "Charge"
 
     return "Other"
 
+
+# ============================================================
+# PERSON / BUSINESS EXTRACTION
+# ============================================================
 
 def extract_person_or_business(details):
 
@@ -215,23 +174,27 @@ def extract_person_or_business(details):
 
         if pattern.lower() in text.lower():
 
-            parts = text.split(pattern)
+            parts = text.lower().split(
+                pattern.lower()
+            )
 
             if len(parts) > 1:
 
-                name = parts[1]
+                result = parts[1].strip()
 
-                name = name.strip()
-                name = name.strip("-:")
-                name = name.strip()
-
-                if name:
-                    return name
+                return result
 
     return text
 
 
-def assign_amount_range(amount):
+# ============================================================
+# AMOUNT RANGE
+# ============================================================
+
+def amount_range(amount):
+
+    if pd.isna(amount):
+        return "Unknown"
 
     if amount < 500:
         return "Below 500"
@@ -252,22 +215,14 @@ def assign_amount_range(amount):
         return "50,000+"
 
 
-def safe_divide(a, b):
-
-    if b == 0:
-        return 0
-
-    return a / b
-
-
 # ============================================================
-# EXCEL UPLOAD
+# UPLOAD FILE
 # ============================================================
 
-st.sidebar.header("Upload Excel File")
+st.sidebar.header("Upload Excel Workbook")
 
 uploaded_file = st.sidebar.file_uploader(
-    "Upload your M-Pesa Excel workbook",
+    "Choose your M-Pesa Excel file",
     type=["xlsx", "xls"]
 )
 
@@ -275,7 +230,7 @@ uploaded_file = st.sidebar.file_uploader(
 if uploaded_file is None:
 
     st.info(
-        "Please upload your M-Pesa Excel workbook using the sidebar."
+        "Upload your M-Pesa Excel workbook from the sidebar."
     )
 
     st.stop()
@@ -287,13 +242,11 @@ if uploaded_file is None:
 
 try:
 
-    excel_file = pd.ExcelFile(uploaded_file)
-
-    available_sheets = excel_file.sheet_names
+    excel = pd.ExcelFile(uploaded_file)
 
 except Exception as e:
 
-    st.error("The Excel file could not be opened.")
+    st.error("Unable to open the Excel file.")
 
     st.error(str(e))
 
@@ -301,12 +254,12 @@ except Exception as e:
 
 
 # ============================================================
-# DISPLAY AVAILABLE SHEETS
+# SHOW SHEETS
 # ============================================================
 
-st.sidebar.subheader("Excel Sheets")
+st.sidebar.subheader("Available Sheets")
 
-for sheet in available_sheets:
+for sheet in excel.sheet_names:
 
     st.sidebar.write("✓", sheet)
 
@@ -315,29 +268,19 @@ for sheet in available_sheets:
 # LOAD TRANSACTIONS
 # ============================================================
 
-if "Transactions" not in available_sheets:
+if "Transactions" not in excel.sheet_names:
 
     st.error(
-        "The Excel workbook must contain a sheet called 'Transactions'."
+        "Your Excel workbook does not contain a 'Transactions' sheet."
     )
 
     st.stop()
 
 
-try:
-
-    df = pd.read_excel(
-        uploaded_file,
-        sheet_name="Transactions"
-    )
-
-except Exception as e:
-
-    st.error("Could not read the Transactions sheet.")
-
-    st.error(str(e))
-
-    st.stop()
+df = pd.read_excel(
+    uploaded_file,
+    sheet_name="Transactions"
+)
 
 
 # ============================================================
@@ -352,24 +295,24 @@ df.columns = (
 
 
 # ============================================================
-# CHECK REQUIRED COLUMNS
+# CHECK COLUMNS
 # ============================================================
 
-missing_columns = [
+missing = [
     column
     for column in REQUIRED_COLUMNS
     if column not in df.columns
 ]
 
 
-if missing_columns:
+if missing:
 
-    st.error("The Transactions sheet is missing these columns:")
+    st.error("The following columns are missing:")
 
-    for column in missing_columns:
-        st.write("-", column)
+    for column in missing:
+        st.write(f"- {column}")
 
-    st.write("Columns found in your Excel file:")
+    st.write("Columns found:")
 
     st.write(list(df.columns))
 
@@ -377,18 +320,7 @@ if missing_columns:
 
 
 # ============================================================
-# CLEAN DATA
-# ============================================================
-
-df["Paid In"] = df["Paid In"].apply(clean_money)
-
-df["Withdrawn"] = df["Withdrawn"].apply(clean_money)
-
-df["Balance"] = df["Balance"].apply(clean_money)
-
-
-# ============================================================
-# DATE CLEANING
+# CLEAN DATE
 # ============================================================
 
 df["Completion Time"] = pd.to_datetime(
@@ -398,15 +330,40 @@ df["Completion Time"] = pd.to_datetime(
 
 
 # ============================================================
-# CLEAN STATUS
+# CLEAN MONEY COLUMNS
 # ============================================================
 
-df["Transaction Status"] = (
-    df["Transaction Status"]
-    .fillna("Unknown")
-    .astype(str)
-    .str.strip()
+df["Paid In"] = df["Paid In"].apply(
+    clean_money
 )
+
+df["Withdrawn"] = df["Withdrawn"].apply(
+    clean_money
+)
+
+df["Balance"] = df["Balance"].apply(
+    clean_money
+)
+
+
+# ============================================================
+# IMPORTANT:
+# SORT BY TIME BEFORE ANALYZING BALANCE
+# ============================================================
+
+df = df.sort_values(
+    by="Completion Time",
+    ascending=True
+).reset_index(drop=True)
+
+
+# ============================================================
+# FILL MISSING MONEY VALUES
+# ============================================================
+
+df["Paid In"] = df["Paid In"].fillna(0)
+
+df["Withdrawn"] = df["Withdrawn"].fillna(0)
 
 
 # ============================================================
@@ -421,16 +378,19 @@ df["Transaction Type"] = (
 )
 
 
-# Detect transaction type where missing or Other
+for i in df.index:
 
-for index in df.index:
+    if (
+        df.loc[i, "Transaction Type"] == ""
+        or
+        df.loc[i, "Transaction Type"].lower()
+        == "other"
+    ):
 
-    current_type = df.loc[index, "Transaction Type"]
-
-    if current_type == "" or current_type.lower() == "other":
-
-        df.loc[index, "Transaction Type"] = detect_transaction_type(
-            df.loc[index, "Details"]
+        df.loc[i, "Transaction Type"] = (
+            detect_transaction_type(
+                df.loc[i, "Details"]
+            )
         )
 
 
@@ -438,14 +398,14 @@ for index in df.index:
 # MONEY IN
 # ============================================================
 
-df["Money In"] = df["Paid In"].fillna(0)
+df["Money In"] = df["Paid In"]
 
 
 # ============================================================
 # MONEY OUT
 # ============================================================
 
-df["Money Out"] = df["Withdrawn"].fillna(0)
+df["Money Out"] = df["Withdrawn"]
 
 
 # ============================================================
@@ -453,7 +413,9 @@ df["Money Out"] = df["Withdrawn"].fillna(0)
 # ============================================================
 
 df["Transaction Amount"] = (
-    df["Money In"] + df["Money Out"]
+    df["Money In"]
+    +
+    df["Money Out"]
 )
 
 
@@ -463,7 +425,7 @@ df["Transaction Amount"] = (
 
 df["Amount Range"] = (
     df["Transaction Amount"]
-    .apply(assign_amount_range)
+    .apply(amount_range)
 )
 
 
@@ -493,13 +455,42 @@ df["Is Charge"] = (
 
 
 # ============================================================
-# SORT DATA
+# BALANCE ANALYSIS
 # ============================================================
 
-df = df.sort_values(
-    by="Completion Time",
-    ascending=True
-).reset_index(drop=True)
+balance_df = df[
+    df["Balance"].notna()
+].copy()
+
+
+if len(balance_df) > 0:
+
+    balance_df = balance_df.sort_values(
+        "Completion Time"
+    )
+
+    opening_balance = (
+        balance_df.iloc[0]["Balance"]
+    )
+
+    closing_balance = (
+        balance_df.iloc[-1]["Balance"]
+    )
+
+    highest_balance = (
+        balance_df["Balance"].max()
+    )
+
+    lowest_balance = (
+        balance_df["Balance"].min()
+    )
+
+else:
+
+    opening_balance = 0
+    closing_balance = 0
+    highest_balance = 0
+    lowest_balance = 0
 
 
 # ============================================================
@@ -509,24 +500,19 @@ df = df.sort_values(
 st.sidebar.header("Filters")
 
 
-# Transaction Type filter
-
 transaction_types = sorted(
     df["Transaction Type"]
     .dropna()
     .unique()
-    .tolist()
 )
 
 
 selected_types = st.sidebar.multiselect(
     "Transaction Type",
     transaction_types,
-    default=transaction_types
+    default=list(transaction_types)
 )
 
-
-# Amount Range filter
 
 amount_ranges = [
     "Below 500",
@@ -549,29 +535,6 @@ selected_ranges = st.sidebar.multiselect(
     existing_ranges,
     default=existing_ranges
 )
-
-
-# Date filter
-
-valid_dates = df["Completion Time"].dropna()
-
-
-if len(valid_dates) > 0:
-
-    min_date = valid_dates.min().date()
-
-    max_date = valid_dates.max().date()
-
-    selected_dates = st.sidebar.date_input(
-        "Date Range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date
-    )
-
-else:
-
-    selected_dates = None
 
 
 # ============================================================
@@ -599,66 +562,73 @@ if selected_ranges:
     ]
 
 
-if selected_dates and len(selected_dates) == 2:
+# ============================================================
+# MAIN HEADER
+# ============================================================
 
-    start_date = pd.Timestamp(
-        selected_dates[0]
+st.header("Account Balance Overview")
+
+
+# ============================================================
+# BALANCE CARDS
+# ============================================================
+
+col1, col2, col3, col4 = st.columns(4)
+
+
+with col1:
+
+    st.metric(
+        "Opening Balance",
+        f"KSh {opening_balance:,.2f}"
     )
 
-    end_date = pd.Timestamp(
-        selected_dates[1]
-    ) + pd.Timedelta(days=1)
 
-    filtered_df = filtered_df[
-        (
-            filtered_df["Completion Time"] >= start_date
-        )
-        &
-        (
-            filtered_df["Completion Time"] < end_date
-        )
-    ]
+with col2:
+
+    st.metric(
+        "Closing Balance",
+        f"KSh {closing_balance:,.2f}"
+    )
+
+
+with col3:
+
+    st.metric(
+        "Highest Balance",
+        f"KSh {highest_balance:,.2f}"
+    )
+
+
+with col4:
+
+    st.metric(
+        "Lowest Balance",
+        f"KSh {lowest_balance:,.2f}"
+    )
 
 
 # ============================================================
-# HEADER
+# MONEY OVERVIEW
 # ============================================================
 
-st.header("M-Pesa Financial Overview")
+st.subheader("Money Overview")
 
-
-# ============================================================
-# KPI CALCULATIONS
-# ============================================================
 
 total_money_in = filtered_df["Money In"].sum()
 
 total_money_out = filtered_df["Money Out"].sum()
 
 net_cash_flow = (
-    total_money_in - total_money_out
+    total_money_in
+    -
+    total_money_out
 )
 
 transaction_count = len(filtered_df)
 
-average_transaction = (
-    filtered_df["Transaction Amount"].mean()
-    if transaction_count > 0
-    else 0
-)
 
-largest_transaction = (
-    filtered_df["Transaction Amount"].max()
-    if transaction_count > 0
-    else 0
-)
-
-
-# ============================================================
-# KPI CARDS
-# ============================================================
-
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1, col2, col3, col4 = st.columns(4)
 
 
 with col1:
@@ -693,20 +663,133 @@ with col4:
     )
 
 
-with col5:
+# ============================================================
+# BALANCE TREND
+# ============================================================
 
-    st.metric(
-        "Average Transaction",
-        f"KSh {average_transaction:,.2f}"
+st.subheader("M-Pesa Balance Over Time")
+
+
+if len(balance_df) > 0:
+
+    fig = go.Figure()
+
+
+    fig.add_trace(
+        go.Scatter(
+            x=balance_df["Completion Time"],
+            y=balance_df["Balance"],
+            mode="lines+markers",
+            name="M-Pesa Balance",
+            hovertemplate=(
+                "<b>Date:</b> %{x}<br>"
+                "<b>Balance:</b> KSh %{y:,.2f}"
+                "<extra></extra>"
+            )
+        )
     )
 
 
-with col6:
-
-    st.metric(
-        "Largest Transaction",
-        f"KSh {largest_transaction:,.2f}"
+    fig.update_layout(
+        title="Running M-Pesa Account Balance",
+        template="plotly_white",
+        xaxis_title="Completion Time",
+        yaxis_title="Balance (KSh)",
+        hovermode="x unified"
     )
+
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
+
+
+# ============================================================
+# BALANCE TABLE
+# ============================================================
+
+st.subheader("Balance History")
+
+
+balance_display = balance_df[
+    [
+        "Receipt No.",
+        "Completion Time",
+        "Details",
+        "Paid In",
+        "Withdrawn",
+        "Balance"
+    ]
+].copy()
+
+
+# Format money columns
+
+for column in [
+    "Paid In",
+    "Withdrawn",
+    "Balance"
+]:
+
+    balance_display[column] = (
+        balance_display[column]
+        .apply(
+            lambda x:
+            f"KSh {x:,.2f}"
+            if pd.notna(x)
+            else ""
+        )
+    )
+
+
+st.dataframe(
+    balance_display,
+    use_container_width=True,
+    height=500
+)
+
+
+# ============================================================
+# BALANCE CHANGE ANALYSIS
+# ============================================================
+
+st.subheader("Balance Change Analysis")
+
+
+balance_change_df = balance_df.copy()
+
+
+balance_change_df["Previous Balance"] = (
+    balance_change_df["Balance"]
+    .shift(1)
+)
+
+
+balance_change_df["Balance Change"] = (
+    balance_change_df["Balance"]
+    -
+    balance_change_df["Previous Balance"]
+)
+
+
+balance_change_df = balance_change_df[
+    [
+        "Completion Time",
+        "Details",
+        "Previous Balance",
+        "Paid In",
+        "Withdrawn",
+        "Balance",
+        "Balance Change"
+    ]
+]
+
+
+st.dataframe(
+    balance_change_df,
+    use_container_width=True
+)
 
 
 # ============================================================
@@ -735,14 +818,13 @@ fig = px.bar(
     x="Category",
     y="Amount",
     text_auto=".2f",
-    title="Total Money In vs Money Out"
+    title="Money In vs Money Out"
 )
 
 
 fig.update_layout(
     template="plotly_white",
-    yaxis_title="Amount (KSh)",
-    xaxis_title=""
+    yaxis_title="Amount (KSh)"
 )
 
 
@@ -753,18 +835,15 @@ st.plotly_chart(
 
 
 # ============================================================
-# MONEY MOVEMENT PIE CHART
+# PIE CHART
 # ============================================================
-
-st.subheader("Money Movement Distribution")
-
 
 fig = px.pie(
     money_summary,
     names="Category",
     values="Amount",
     hole=0.4,
-    title="Money Movement"
+    title="Money Movement Distribution"
 )
 
 
@@ -780,18 +859,27 @@ st.plotly_chart(
 
 
 # ============================================================
-# TRANSACTION TYPE ANALYSIS
+# TRANSACTION TYPES
 # ============================================================
 
-st.subheader("Amount by Transaction Type")
+st.subheader("Transaction Type Analysis")
 
 
 type_analysis = (
     filtered_df
-    .groupby("Transaction Type", as_index=False)
+    .groupby(
+        "Transaction Type",
+        as_index=False
+    )
     .agg(
-        Total_Amount=("Transaction Amount", "sum"),
-        Transaction_Count=("Transaction Type", "count")
+        Total_Amount=(
+            "Transaction Amount",
+            "sum"
+        ),
+        Transaction_Count=(
+            "Transaction Type",
+            "count"
+        )
     )
     .sort_values(
         "Total_Amount",
@@ -805,7 +893,7 @@ fig = px.bar(
     x="Transaction Type",
     y="Total_Amount",
     text_auto=".2f",
-    title="Total Amount by Transaction Type"
+    title="Amount by Transaction Type"
 )
 
 
@@ -823,33 +911,7 @@ st.plotly_chart(
 
 
 # ============================================================
-# TRANSACTION COUNT BY TYPE
-# ============================================================
-
-fig = px.bar(
-    type_analysis,
-    x="Transaction Type",
-    y="Transaction_Count",
-    text_auto=True,
-    title="Number of Transactions by Type"
-)
-
-
-fig.update_layout(
-    template="plotly_white",
-    xaxis_tickangle=-45,
-    yaxis_title="Number of Transactions"
-)
-
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-
-# ============================================================
-# AMOUNT RANGE ANALYSIS
+# AMOUNT RANGE
 # ============================================================
 
 st.subheader("Amount Range Analysis")
@@ -857,23 +919,20 @@ st.subheader("Amount Range Analysis")
 
 range_analysis = (
     filtered_df
-    .groupby("Amount Range", as_index=False)
-    .agg(
-        Total_Amount=("Transaction Amount", "sum"),
-        Transaction_Count=("Transaction Amount", "count")
+    .groupby(
+        "Amount Range",
+        as_index=False
     )
-)
-
-
-range_analysis["Amount Range"] = pd.Categorical(
-    range_analysis["Amount Range"],
-    categories=amount_ranges,
-    ordered=True
-)
-
-
-range_analysis = range_analysis.sort_values(
-    "Amount Range"
+    .agg(
+        Transaction_Count=(
+            "Transaction Amount",
+            "count"
+        ),
+        Total_Amount=(
+            "Transaction Amount",
+            "sum"
+        )
+    )
 )
 
 
@@ -900,7 +959,77 @@ st.plotly_chart(
 
 
 # ============================================================
-# AMOUNT HISTOGRAM
+# DAILY MONEY MOVEMENT
+# ============================================================
+
+st.subheader("Daily Money Movement")
+
+
+daily_df = filtered_df.dropna(
+    subset=["Completion Time"]
+).copy()
+
+
+if len(daily_df) > 0:
+
+    daily_df["Date"] = (
+        daily_df["Completion Time"]
+        .dt.date
+    )
+
+
+    daily = (
+        daily_df
+        .groupby(
+            "Date",
+            as_index=False
+        )
+        .agg(
+            Money_In=("Money In", "sum"),
+            Money_Out=("Money Out", "sum")
+        )
+    )
+
+
+    fig = go.Figure()
+
+
+    fig.add_trace(
+        go.Scatter(
+            x=daily["Date"],
+            y=daily["Money_In"],
+            mode="lines+markers",
+            name="Money In"
+        )
+    )
+
+
+    fig.add_trace(
+        go.Scatter(
+            x=daily["Date"],
+            y=daily["Money_Out"],
+            mode="lines+markers",
+            name="Money Out"
+        )
+    )
+
+
+    fig.update_layout(
+        title="Daily Money In and Money Out",
+        template="plotly_white",
+        xaxis_title="Date",
+        yaxis_title="Amount (KSh)"
+    )
+
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
+
+
+# ============================================================
+# TRANSACTION AMOUNT HISTOGRAM
 # ============================================================
 
 st.subheader("Transaction Amount Distribution")
@@ -928,387 +1057,13 @@ st.plotly_chart(
 
 
 # ============================================================
-# TOP MONEY-IN SOURCES
-# ============================================================
-
-st.subheader("Top Money-In Sources")
-
-
-money_in_df = filtered_df[
-    filtered_df["Money In"] > 0
-].copy()
-
-
-if len(money_in_df) > 0:
-
-    top_sources = (
-        money_in_df
-        .groupby(
-            "Person / Business",
-            as_index=False
-        )["Money In"]
-        .sum()
-        .sort_values(
-            "Money In",
-            ascending=False
-        )
-        .head(10)
-    )
-
-    fig = px.bar(
-        top_sources,
-        x="Money In",
-        y="Person / Business",
-        orientation="h",
-        title="Top 10 Money-In Sources",
-        text_auto=".2f"
-    )
-
-    fig.update_layout(
-        template="plotly_white",
-        xaxis_title="Money Received (KSh)",
-        yaxis_title=""
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-else:
-
-    st.info("No money-in transactions found.")
-
-
-# ============================================================
-# TOP MONEY-OUT DESTINATIONS
-# ============================================================
-
-st.subheader("Top Money-Out Destinations")
-
-
-money_out_df = filtered_df[
-    filtered_df["Money Out"] > 0
-].copy()
-
-
-if len(money_out_df) > 0:
-
-    top_destinations = (
-        money_out_df
-        .groupby(
-            "Person / Business",
-            as_index=False
-        )["Money Out"]
-        .sum()
-        .sort_values(
-            "Money Out",
-            ascending=False
-        )
-        .head(10)
-    )
-
-    fig = px.bar(
-        top_destinations,
-        x="Money Out",
-        y="Person / Business",
-        orientation="h",
-        title="Top 10 Money-Out Destinations",
-        text_auto=".2f"
-    )
-
-    fig.update_layout(
-        template="plotly_white",
-        xaxis_title="Money Sent (KSh)",
-        yaxis_title=""
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-else:
-
-    st.info("No money-out transactions found.")
-
-
-# ============================================================
-# SAME PERSON ANALYSIS
-# ============================================================
-
-st.subheader("Same Person / Business Analysis")
-
-
-received_by_person = (
-    filtered_df[
-        filtered_df["Money In"] > 0
-    ]
-    .groupby(
-        "Person / Business"
-    )["Money In"]
-    .sum()
-)
-
-
-sent_by_person = (
-    filtered_df[
-        filtered_df["Money Out"] > 0
-    ]
-    .groupby(
-        "Person / Business"
-    )["Money Out"]
-    .sum()
-)
-
-
-same_people = sorted(
-    set(received_by_person.index)
-    &
-    set(sent_by_person.index)
-)
-
-
-if same_people:
-
-    same_person_data = pd.DataFrame(
-        {
-            "Person / Business": same_people,
-            "Received": [
-                received_by_person.get(
-                    person,
-                    0
-                )
-                for person in same_people
-            ],
-            "Sent": [
-                sent_by_person.get(
-                    person,
-                    0
-                )
-                for person in same_people
-            ]
-        }
-    )
-
-
-    same_person_data["Net"] = (
-        same_person_data["Received"]
-        -
-        same_person_data["Sent"]
-    )
-
-
-    fig = go.Figure()
-
-
-    fig.add_trace(
-        go.Bar(
-            x=same_person_data[
-                "Person / Business"
-            ],
-            y=same_person_data["Received"],
-            name="Received"
-        )
-    )
-
-
-    fig.add_trace(
-        go.Bar(
-            x=same_person_data[
-                "Person / Business"
-            ],
-            y=same_person_data["Sent"],
-            name="Sent"
-        )
-    )
-
-
-    fig.update_layout(
-        barmode="group",
-        title="Money Received and Sent to the Same Person / Business",
-        template="plotly_white",
-        xaxis_tickangle=-45,
-        yaxis_title="Amount (KSh)"
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-    st.dataframe(
-        same_person_data,
-        use_container_width=True
-    )
-
-else:
-
-    st.info(
-        "No person or business appears on both money-in and money-out transactions."
-    )
-
-
-# ============================================================
-# DAILY MONEY MOVEMENT
-# ============================================================
-
-st.subheader("Daily Money Movement")
-
-
-daily_df = filtered_df.dropna(
-    subset=["Completion Time"]
-).copy()
-
-
-if len(daily_df) > 0:
-
-    daily_df["Date"] = (
-        daily_df["Completion Time"]
-        .dt.date
-    )
-
-
-    daily_analysis = (
-        daily_df
-        .groupby("Date", as_index=False)
-        .agg(
-            Money_In=("Money In", "sum"),
-            Money_Out=("Money Out", "sum"),
-            Transactions=("Transaction Amount", "count")
-        )
-    )
-
-
-    fig = go.Figure()
-
-
-    fig.add_trace(
-        go.Scatter(
-            x=daily_analysis["Date"],
-            y=daily_analysis["Money_In"],
-            mode="lines+markers",
-            name="Money In"
-        )
-    )
-
-
-    fig.add_trace(
-        go.Scatter(
-            x=daily_analysis["Date"],
-            y=daily_analysis["Money_Out"],
-            mode="lines+markers",
-            name="Money Out"
-        )
-    )
-
-
-    fig.update_layout(
-        title="Daily Money In and Money Out",
-        template="plotly_white",
-        xaxis_title="Date",
-        yaxis_title="Amount (KSh)"
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-# ============================================================
-# DAILY TRANSACTION COUNT
-# ============================================================
-
-st.subheader("Daily Transaction Count")
-
-
-if len(daily_df) > 0:
-
-    daily_count = (
-        daily_df
-        .groupby("Date")
-        .size()
-        .reset_index(
-            name="Transactions"
-        )
-    )
-
-
-    fig = px.bar(
-        daily_count,
-        x="Date",
-        y="Transactions",
-        text_auto=True,
-        title="Transactions per Day"
-    )
-
-
-    fig.update_layout(
-        template="plotly_white",
-        xaxis_title="Date",
-        yaxis_title="Number of Transactions"
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-# ============================================================
-# BALANCE TREND
-# ============================================================
-
-st.subheader("M-Pesa Balance Trend")
-
-
-balance_df = filtered_df.dropna(
-    subset=["Completion Time"]
-).copy()
-
-
-if len(balance_df) > 0:
-
-    balance_df = balance_df.sort_values(
-        "Completion Time"
-    )
-
-
-    fig = px.line(
-        balance_df,
-        x="Completion Time",
-        y="Balance",
-        markers=True,
-        title="Balance Over Time"
-    )
-
-
-    fig.update_layout(
-        template="plotly_white",
-        xaxis_title="Completion Time",
-        yaxis_title="Balance (KSh)"
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-# ============================================================
 # TRANSACTION STATUS
 # ============================================================
 
-st.subheader("Transaction Status Analysis")
+st.subheader("Transaction Status")
 
 
-status_analysis = (
+status = (
     filtered_df
     .groupby(
         "Transaction Status"
@@ -1321,11 +1076,11 @@ status_analysis = (
 
 
 fig = px.pie(
-    status_analysis,
+    status,
     names="Transaction Status",
     values="Transactions",
     hole=0.4,
-    title="Transaction Status"
+    title="Transaction Status Distribution"
 )
 
 
@@ -1341,68 +1096,47 @@ st.plotly_chart(
 
 
 # ============================================================
-# CHARGES AND FEES
+# TOP MONEY-IN SOURCES
 # ============================================================
 
-st.subheader("Charges and Fees")
+st.subheader("Top Money-In Sources")
 
 
-charges_df = filtered_df[
-    filtered_df["Is Charge"] == True
+money_in = filtered_df[
+    filtered_df["Money In"] > 0
 ]
 
 
-total_charges = (
-    charges_df["Transaction Amount"].sum()
-)
+if len(money_in) > 0:
 
-
-charge_count = len(charges_df)
-
-
-col1, col2 = st.columns(2)
-
-
-with col1:
-
-    st.metric(
-        "Total Charges",
-        f"KSh {total_charges:,.2f}"
-    )
-
-
-with col2:
-
-    st.metric(
-        "Number of Charges",
-        f"{charge_count:,}"
-    )
-
-
-if len(charges_df) > 0:
-
-    charge_analysis = (
-        charges_df
+    sources = (
+        money_in
         .groupby(
-            "Transaction Type",
+            "Person / Business",
             as_index=False
-        )["Transaction Amount"]
+        )["Money In"]
         .sum()
+        .sort_values(
+            "Money In",
+            ascending=False
+        )
+        .head(10)
     )
 
 
     fig = px.bar(
-        charge_analysis,
-        x="Transaction Type",
-        y="Transaction Amount",
+        sources,
+        x="Money In",
+        y="Person / Business",
+        orientation="h",
         text_auto=".2f",
-        title="Charges by Type"
+        title="Top 10 Money-In Sources"
     )
 
 
     fig.update_layout(
         template="plotly_white",
-        yaxis_title="Amount (KSh)"
+        xaxis_title="Money Received (KSh)"
     )
 
 
@@ -1413,147 +1147,120 @@ if len(charges_df) > 0:
 
 
 # ============================================================
-# ORIGINAL STATEMENT SUMMARY SHEET
+# TOP MONEY-OUT DESTINATIONS
 # ============================================================
 
-st.subheader("Statement Summary")
+st.subheader("Top Money-Out Destinations")
 
 
-if "Statement Summary" in available_sheets:
+money_out = filtered_df[
+    filtered_df["Money Out"] > 0
+]
 
-    try:
 
-        summary_df = pd.read_excel(
-            uploaded_file,
-            sheet_name="Statement Summary"
+if len(money_out) > 0:
+
+    destinations = (
+        money_out
+        .groupby(
+            "Person / Business",
+            as_index=False
+        )["Money Out"]
+        .sum()
+        .sort_values(
+            "Money Out",
+            ascending=False
         )
+        .head(10)
+    )
 
 
-        summary_df = summary_df.dropna(
-            how="all"
-        )
+    fig = px.bar(
+        destinations,
+        x="Money Out",
+        y="Person / Business",
+        orientation="h",
+        text_auto=".2f",
+        title="Top 10 Money-Out Destinations"
+    )
 
 
-        st.dataframe(
-            summary_df,
-            use_container_width=True
-        )
+    fig.update_layout(
+        template="plotly_white",
+        xaxis_title="Money Sent (KSh)"
+    )
 
 
-    except Exception as e:
-
-        st.warning(
-            f"Could not read Statement Summary: {e}"
-        )
-
-
-# ============================================================
-# AMOUNT RANGE SHEET
-# ============================================================
-
-st.subheader("Amount Range Analysis Sheet")
-
-
-if "Amount Range Analysis" in available_sheets:
-
-    try:
-
-        amount_range_df = pd.read_excel(
-            uploaded_file,
-            sheet_name="Amount Range Analysis"
-        )
-
-
-        amount_range_df = amount_range_df.dropna(
-            how="all"
-        )
-
-
-        st.dataframe(
-            amount_range_df,
-            use_container_width=True
-        )
-
-
-    except Exception as e:
-
-        st.warning(
-            f"Could not read Amount Range Analysis: {e}"
-        )
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
 
 
 # ============================================================
-# SAME PERSON SHEET
+# SAME PERSON ANALYSIS
 # ============================================================
 
-st.subheader("Same Person Analysis Sheet")
+st.subheader("Same Person / Business Analysis")
 
 
-if "Same Person Analysis" in available_sheets:
-
-    try:
-
-        same_person_sheet = pd.read_excel(
-            uploaded_file,
-            sheet_name="Same Person Analysis"
-        )
-
-
-        same_person_sheet = same_person_sheet.dropna(
-            how="all"
-        )
+received = (
+    filtered_df[
+        filtered_df["Money In"] > 0
+    ]
+    .groupby(
+        "Person / Business"
+    )["Money In"]
+    .sum()
+)
 
 
-        st.dataframe(
-            same_person_sheet,
-            use_container_width=True
-        )
+sent = (
+    filtered_df[
+        filtered_df["Money Out"] > 0
+    ]
+    .groupby(
+        "Person / Business"
+    )["Money Out"]
+    .sum()
+)
 
 
-    except Exception as e:
-
-        st.warning(
-            f"Could not read Same Person Analysis: {e}"
-        )
-
-
-# ============================================================
-# OCR RAW DATA
-# ============================================================
-
-st.subheader("OCR Raw Rows")
+same_people = sorted(
+    set(received.index)
+    &
+    set(sent.index)
+)
 
 
-if "OCR Raw Rows" in available_sheets:
+if same_people:
 
-    try:
-
-        ocr_df = pd.read_excel(
-            uploaded_file,
-            sheet_name="OCR Raw Rows"
-        )
-
-
-        ocr_df = ocr_df.dropna(
-            how="all"
-        )
-
-
-        with st.expander(
-            "Show OCR Raw Data"
-        ):
-
-            st.dataframe(
-                ocr_df,
-                use_container_width=True
-            )
+    same_person = pd.DataFrame(
+        {
+            "Person / Business": same_people,
+            "Received": [
+                received.get(x, 0)
+                for x in same_people
+            ],
+            "Sent": [
+                sent.get(x, 0)
+                for x in same_people
+            ]
+        }
+    )
 
 
-    except Exception as e:
+    same_person["Net"] = (
+        same_person["Received"]
+        -
+        same_person["Sent"]
+    )
 
-        st.warning(
-            f"Could not read OCR Raw Rows: {e}"
-        )
+
+    st.dataframe(
+        same_person,
+        use_container_width=True
+    )
 
 
 # ============================================================
@@ -1582,27 +1289,24 @@ display_columns = [
 
 
 display_columns = [
-    column
-    for column in display_columns
-    if column in filtered_df.columns
+    x
+    for x in display_columns
+    if x in filtered_df.columns
 ]
 
 
-st.dataframe(
-    filtered_df[display_columns],
-    use_container_width=True,
-    height=600
-)
+# Create a copy so we don't change the underlying data
+
+display_df = filtered_df[
+    display_columns
+].copy()
 
 
 # ============================================================
-# DESCRIPTIVE STATISTICS
+# FORMAT MONEY FOR DISPLAY
 # ============================================================
 
-st.subheader("Transaction Statistics")
-
-
-numeric_columns = [
+money_columns = [
     "Paid In",
     "Withdrawn",
     "Balance",
@@ -1612,39 +1316,36 @@ numeric_columns = [
 ]
 
 
-available_numeric = [
-    column
-    for column in numeric_columns
-    if column in filtered_df.columns
-]
+for column in money_columns:
+
+    if column in display_df.columns:
+
+        display_df[column] = (
+            display_df[column]
+            .apply(
+                lambda x:
+                f"KSh {x:,.2f}"
+                if pd.notna(x)
+                else ""
+            )
+        )
 
 
-if available_numeric:
-
-    statistics = (
-        filtered_df[available_numeric]
-        .describe()
-        .T
-    )
-
-
-    statistics = statistics.round(2)
-
-
-    st.dataframe(
-        statistics,
-        use_container_width=True
-    )
+st.dataframe(
+    display_df,
+    use_container_width=True,
+    height=600
+)
 
 
 # ============================================================
-# TOP TRANSACTIONS
+# LARGEST TRANSACTIONS
 # ============================================================
 
 st.subheader("Largest Transactions")
 
 
-largest_transactions = (
+largest = (
     filtered_df
     .sort_values(
         "Transaction Amount",
@@ -1654,107 +1355,102 @@ largest_transactions = (
 )
 
 
+largest_display = largest[
+    display_columns
+].copy()
+
+
+for column in money_columns:
+
+    if column in largest_display.columns:
+
+        largest_display[column] = (
+            largest_display[column]
+            .apply(
+                lambda x:
+                f"KSh {x:,.2f}"
+                if pd.notna(x)
+                else ""
+            )
+        )
+
+
 st.dataframe(
-    largest_transactions[display_columns],
+    largest_display,
     use_container_width=True
 )
 
 
 # ============================================================
-# MONEY-IN TRANSACTIONS TABLE
+# ORIGINAL STATEMENT SUMMARY
 # ============================================================
 
-st.subheader("Money-In Transactions")
+if "Statement Summary" in excel.sheet_names:
 
+    st.subheader("Statement Summary Sheet")
 
-money_in_display = filtered_df[
-    filtered_df["Money In"] > 0
-]
+    try:
 
+        statement_summary = pd.read_excel(
+            uploaded_file,
+            sheet_name="Statement Summary"
+        )
 
-st.dataframe(
-    money_in_display[display_columns],
-    use_container_width=True
-)
+        st.dataframe(
+            statement_summary,
+            use_container_width=True
+        )
+
+    except Exception as e:
+
+        st.warning(
+            f"Unable to read Statement Summary: {e}"
+        )
 
 
 # ============================================================
-# MONEY-OUT TRANSACTIONS TABLE
+# OCR RAW ROWS
 # ============================================================
 
-st.subheader("Money-Out Transactions")
+if "OCR Raw Rows" in excel.sheet_names:
 
+    with st.expander("View OCR Raw Rows"):
 
-money_out_display = filtered_df[
-    filtered_df["Money Out"] > 0
-]
+        try:
 
+            ocr = pd.read_excel(
+                uploaded_file,
+                sheet_name="OCR Raw Rows"
+            )
 
-st.dataframe(
-    money_out_display[display_columns],
-    use_container_width=True
-)
+            st.dataframe(
+                ocr,
+                use_container_width=True
+            )
+
+        except Exception as e:
+
+            st.warning(
+                f"Unable to read OCR Raw Rows: {e}"
+            )
 
 
 # ============================================================
 # DOWNLOAD FILTERED DATA
 # ============================================================
 
-st.subheader("Download Data")
+st.subheader("Download")
 
 
-csv_data = filtered_df.to_csv(
+csv = filtered_df.to_csv(
     index=False
 ).encode("utf-8")
 
 
 st.download_button(
-    label="Download Filtered Transactions CSV",
-    data=csv_data,
-    file_name="filtered_mpesa_transactions.csv",
-    mime="text/csv"
-)
-
-
-# ============================================================
-# DOWNLOAD FINANCIAL SUMMARY
-# ============================================================
-
-financial_summary = pd.DataFrame(
-    {
-        "Metric": [
-            "Total Money In",
-            "Total Money Out",
-            "Net Cash Flow",
-            "Number of Transactions",
-            "Average Transaction",
-            "Largest Transaction",
-            "Total Charges",
-            "Number of Charges"
-        ],
-        "Value": [
-            total_money_in,
-            total_money_out,
-            net_cash_flow,
-            transaction_count,
-            average_transaction,
-            largest_transaction,
-            total_charges,
-            charge_count
-        ]
-    }
-)
-
-
-summary_csv = financial_summary.to_csv(
-    index=False
-).encode("utf-8")
-
-
-st.download_button(
-    label="Download Financial Summary",
-    data=summary_csv,
-    file_name="mpesa_financial_summary.csv",
+    "Download Filtered Transactions",
+    data=csv,
+    file_name="mpesa_filtered_transactions.csv",
     mime="text/csv"
 )
 
@@ -1770,6 +1466,6 @@ st.caption(
 )
 
 st.caption(
-    "Important: If the original statement was created from photos/OCR, "
-    "check important amounts and names against the original statement."
+    "For OCR-generated statements, verify important amounts "
+    "and balances against the original statement."
 )
